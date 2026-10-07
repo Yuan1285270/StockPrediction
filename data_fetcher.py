@@ -26,6 +26,22 @@ def get_shares_outstanding(tk: yf.Ticker):
     return float(sh) if isinstance(sh, (int, float)) and sh > 0 else None
 
 
+def get_annual_eps_by_year(tk: yf.Ticker):
+    """Return {fiscal_year: EPS} from the annual income statement."""
+    try:
+        stmt = tk.income_stmt
+    except Exception:
+        stmt = None
+    if stmt is None or getattr(stmt, "empty", True):
+        return {}
+
+    for key in ["Basic EPS", "Diluted EPS"]:
+        if key in stmt.index:
+            row = stmt.loc[key].dropna()
+            return {int(col.year): float(v) for col, v in row.items()}
+    return {}
+
+
 def get_dividend_by_year(dividends: pd.Series):
     """Return {year: total_dividend_per_share}"""
     if dividends is None or dividends.empty:

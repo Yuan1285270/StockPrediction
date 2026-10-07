@@ -541,6 +541,7 @@ SYMBOLS = [
 
 YEARS_FOR_PAYOUT = 5
 YIELD_THRESHOLD = 0.06
+MAX_PAYOUT_RATIO = 1.0  # cap per-year payout ratio (dividend / previous-year EPS)
 
 STATE_FILE = Path("state.json")
 

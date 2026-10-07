@@ -36,12 +36,17 @@ This project aims to answer these questions in a systematic and reproducible way
 The stock screening process consists of the following steps:
 
 1. EPS Estimation  
-   - Use historical EPS data (e.g., past 3–5 years)  
-   - Estimate the current-year EPS using a simple statistical method
-     (average or trend-based)
+   - Quarterly EPS = quarterly net income / shares outstanding  
+   - Next-quarter EPS = average of the latest three quarters  
+   - Next-year EPS = next-quarter EPS × 4
 
 2. Dividend Estimation  
-   - Compute the historical average payout ratio  
+   - Compute the historical average payout ratio over the last 5 years.
+     Taiwan companies pay dividends in year y out of the earnings of
+     fiscal year y-1, so each payout ratio is
+     dividend paid in year y / EPS of fiscal year y-1.
+     Years with non-positive EPS are skipped, and each ratio is capped at
+     100% (`MAX_PAYOUT_RATIO` in `config.py`).  
    - Estimate expected cash dividends:
 
    Expected Dividend = Estimated EPS × Average Payout Ratio
@@ -98,9 +103,13 @@ pip install yfinance pandas numpy
 
 Run the program:
 
-python stock_selector.py
+python main.py --mode yield     # compute all symbols
+python main.py --mode event     # recalculate only symbols whose EPS, dividend, or news changed
 
-You can modify the stock list and screening thresholds directly in the script.
+Results are written to `result/` as `yield_<timestamp>.csv` (all symbols) and
+`high_yield_6pct_<timestamp>.csv` (yield >= threshold).
+You can change the stock list and thresholds in `config.py` or with
+`--symbols`, `--years`, and `--threshold`.
 
 ---
 
@@ -120,6 +129,8 @@ You can modify the stock list and screening thresholds directly in the script.
 
 - Yahoo Finance data may be incomplete for some stocks  
 - EPS estimation is currently rule-based  
+- One-off gains in recent quarters can inflate the next-quarter EPS estimate,
+  so very high estimated yields should be checked by hand  
 - No backtesting module yet  
 - Dividend policy changes are not dynamically modeled  
 

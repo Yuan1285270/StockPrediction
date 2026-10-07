@@ -1,5 +1,4 @@
 from datetime import datetime
-from fileinput import filename
 import yfinance as yf
 import pandas as pd
 import config
@@ -9,23 +8,36 @@ from data_fetcher import (
     get_trailing_eps,
     get_shares_outstanding,
     get_dividend_by_year,
+    get_annual_eps_by_year,
 )
 
 
-def avg_payout_ratio(div_by_year: dict, eps_ttm: float, years: int):
-    """Average payout ratio over last N years: annual_dividend / eps_ttm."""
-    if not div_by_year or not eps_ttm or eps_ttm <= 0:
-        return None
+def avg_payout_ratio(div_by_year: dict, eps_by_year: dict, years: int):
+    """Average payout ratio over the last N dividend years.
+
+    Taiwan companies pay dividends in year y out of the earnings of fiscal
+    year y-1, so each year's dividend is divided by the previous year's EPS.
+    Years with non-positive or missing EPS are skipped, and each ratio is
+    capped at config.MAX_PAYOUT_RATIO so a one-off payout from retained
+    earnings does not inflate the estimate.
+
+    Returns: (avg_ratio, n_years_used) or (None, 0)
+    """
+    if not div_by_year or not eps_by_year:
+        return None, 0
 
     cur_year = datetime.now().year
     ratios = []
     for y in range(cur_year - 1, cur_year - 1 - years, -1):
-        if y in div_by_year:
-            ratios.append(div_by_year[y] / eps_ttm)
+        eps = eps_by_year.get(y - 1)
+        if eps is None or eps <= 0:
+            continue
+        ratio = div_by_year.get(y, 0.0) / eps
+        ratios.append(min(ratio, config.MAX_PAYOUT_RATIO))
 
     if not ratios:
-        return None
-    return sum(ratios) / len(ratios)
+        return None, 0
+    return sum(ratios) / len(ratios), len(ratios)
 
 
 def estimate_next_quarter_eps_from_quarterly(tk: yf.Ticker):
@@ -87,7 +99,6 @@ def estimate_next_quarter_eps_from_quarterly(tk: yf.Ticker):
     if len(eps_q_series) < 2:
         return eps_q_series, float(eps_q_series[-1])
 
-    # ✅ 這裡只修你貼的原檔那個「註解縮排會炸」的問題（不改邏輯）
     # Simple average of recent 3 quarters (align with "use first three quarters to estimate next")
     recent = eps_q_series[:3]
     if not recent:
@@ -105,7 +116,8 @@ def estimate_yield_for_symbol(symbol: str, years_for_payout: int, trigger_reason
       - Estimate next-quarter EPS (from quarterly statements)
         - fallback to base_q_eps = trailingEps/4 if quarterly data missing
       - next_year_eps_est = next_q_eps_est * 4
-      - payout_ratio = avg dividend payout ratio from last N years
+      - payout_ratio = avg of (dividend paid in year y / EPS of year y-1)
+        over the last N years
       - estimated_dividend = next_year_eps_est * payout_ratio
       - estimated_yield = estimated_dividend / price
 
@@ -133,11 +145,13 @@ def estimate_yield_for_symbol(symbol: str, years_for_payout: int, trigger_reason
 
     # payout ratio
     div_by_year = get_dividend_by_year(dividends)
-    payout = avg_payout_ratio(div_by_year, float(eps_ttm), years_for_payout)
+    eps_by_year = get_annual_eps_by_year(tk)
+    payout, payout_years = avg_payout_ratio(div_by_year, eps_by_year, years_for_payout)
     if payout is None:
         return None, tk
 
-    est_dividend = float(next_year_eps_est) * float(payout)
+    # A company cannot pay a negative dividend
+    est_dividend = max(0.0, float(next_year_eps_est) * float(payout))
     est_yield = float(est_dividend) / float(price)
 
     row = {
@@ -154,6 +168,7 @@ def estimate_yield_for_symbol(symbol: str, years_for_payout: int, trigger_reason
 
         # payout + yield
         "avg_payout_ratio": round(float(payout), 3),
+        "payout_years_used": payout_years,
         "est_dividend": round(float(est_dividend), 2),
         "est_yield_%": round(float(est_yield) * 100, 2),
     }
@@ -176,12 +191,21 @@ def yield_mode(symbols, years_for_payout, yield_threshold):
     if not df_all.empty:
         df_all = df_all.sort_values("est_yield_%", ascending=False)
 
-    df_high = df_all[df_all["est_yield_%"] >= 6]
+    threshold_pct = float(yield_threshold) * 100.0
+    if df_all.empty:
+        print("沒有可計算的股票")
+        return df_all, df_all
 
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    all_path = config.RESULT_DIR / f"yield_{ts}.csv"
+    df_all.to_csv(all_path, index=False, encoding="utf-8-sig")
+    print(f"輸出完成: {all_path}")
+
+    df_high = df_all[df_all["est_yield_%"] >= threshold_pct]
     if not df_high.empty:
-        filename = "result/high_yield.csv"
-        df_high.to_csv(filename, index=False)
-        print(f"輸出完成: {filename}")
+        high_path = config.RESULT_DIR / f"high_yield_{int(threshold_pct)}pct_{ts}.csv"
+        df_high.to_csv(high_path, index=False, encoding="utf-8-sig")
+        print(f"輸出完成: {high_path}")
     else:
-        print("沒有大於6%的股票")
+        print(f"沒有大於{int(threshold_pct)}%的股票")
     return df_all, df_high
